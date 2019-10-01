@@ -1,0 +1,769 @@
+################
+### istA HMM ###
+################
+
+## 0. Download the data:
+esearch -db protein -query "istA[All Fields] AND ((bacteria[filter] OR archaea[filter] OR virus[filter]) AND refseq[filter]" | efetch -format fasta >istA.refseq.faa
+
+esearch -db protein -query "istA[All Fields] AND ((bacteria[filter] OR archaea[filter] OR virus[filter])" | efetch -format fasta >istA.all.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' istA.faa
+
+# Cluster duplicate sequences
+cd-hit -i istA.refseq.faa -o istA.refseq.unq.faa -c 1 -g 1 -d 0
+#total seq: 71
+#longest and shortest : 559 and 85
+#Total letters: 2829
+#71  finished         28  clusters
+
+cd-hit -i istA.all.faa -o istA.all.unq.faa -c 1 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% identity to other sequences or greater than 80% identity)
+t_coffee -other_pg seq_reformat -in istA.refseq.unq.faa -action +trim _seq_%%80_O20 >istA.refseq.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino istA.refseq.unq.trim.faa > istA.refseq.unq.trim.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -infile=istA.refseq.unq.trim.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' istA.refseq.unq.trim.mafft.score_ascii >istA.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+./sCORE_dist.R --infile istA.sCORE.csv --png istA.sCORE.png
+
+bad_seqs=$(awk -v threshold=50 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 < threshold) {print $1}}' istA.refseq.unq.trim.mafft.score_ascii)  #extract sequences that may harm accuracy of the alignment
+
+best_seqs=($(awk -v threshold=50 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' istA.refseq.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+filterbyname.sh in=istA.unq.trim.faa -names=$(IFS=","; shift; echo "'${best_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=istA.refseq.unq.trim.best.faa
+
+## 4. Create the seed alignment:
+t_coffee -other_pg seq_reformat -in istA.refseq.unq.trim.best.faa -action +trim _seq_n40 -output fasta_seq >istA.seed.faa  #extract the 40 most informative sequences for alignment
+
+t_coffee -n_core=3 -in istA.seed.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name istA.seed  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile istA.seed.fasta_aln -evaluate -output tcs_residue_filter3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o istA.seed.tcs_residue_filter3.sto --mingap stockholm istA.seed.tcs_residue_filter3
+
+hmmbuild --amino -n istA istA.hmm istA.seed.tcs_residue_filter3.sto
+
+## 7. Align SwissProt proteins to profile HMM:
+hmmsearch --cpu 3 --tblout istA.sprot_search_profile.csv -o istA.sprot_search_profile.log istA.hmm /home/cthornton/Projects/databases/SwissProt/sprot.faa
+
+grep -v "^#" istA.sprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.sprot_search_profile.filt.csv
+
+grep -v "^#" istA.sprot_search_profile.filt.csv | cut -f1 | filterbyname.sh in=/home/cthornton/Projects/databases/SwissProt/sprot.faa -names=/dev/stdin ignorejunk=t ow=t prefix=f include=t out=istA.sprot.faa
+
+## 8. Align all istA records from NCBI to profile HMM:
+hmmsearch --cpu 3 --tblout istA.all_search_profile.csv -o istA.all_search_profile.log istA.hmm istA.all.unq.faa
+
+grep -v "^#" istA.all_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.all_search_profile.filt.csv
+
+## 9. Align remaining good sequences and swissprot matches to Pfam and compare bitscores with closest Pfam family
+hmmsearch --cpu 3 --tblout istA.all_search_pfam.csv -o istA.all_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm istA.all.unq.faa
+
+grep -v "^#" istA.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.all_search_pfam.filt.csv
+
+hmmsearch --cpu 3 --tblout istA.sprot_search_pfam.csv -o istA.sprot_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm istA.sprot.faa
+
+grep -v "^#" istA.sprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.sprot_search_pfam.filt.csv
+
+cat istA.all_search_profile.filt.csv istA.sprot_search_profile.filt.csv >istA.search_profile.filt.csv
+cat istA.all_search_pfam.filt.csv istA.sprot_search_pfam.filt.csv >istA.search_pfam.filt.csv
+
+## 7. Compare custom profile with Pfam using independent test dataset to determine threshold values:
+hmmsearch --cpu 3 -o /dev/null --tblout istA.uniprot_search_profile.csv istA.hmm uniprot-istA.fasta
+grep -v "^#" istA.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.uniprot_search_profile.filt.csv
+
+hmmsearch --cpu 3 -o /dev/null --tblout istA.uniprot_search_pfam.csv /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm uniprot-istA.fasta
+grep -v "^#" istA.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.uniprot_search_pfam.filt.csv
+
+## 8. Determine threshold values
+../assign_GA.R --png istA.scores.png --out istA.good_seqs.txt istA.uniprot_search_profile.filt.csv istA.uniprot_search_pfam.filt.csv
+
+################################
+## Determine threshold values ##
+################################
+
+## istA
+srun --cpus-per-task 4 hmmsearch --cpu 4 -E 0.1 -o /dev/null --tblout istA.uniprot_search_profile.csv istA.hmm /srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz &
+grep -v "^#" istA.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.uniprot_search_profile.filt.csv
+
+grep -v "^#" istA.uniprot_search_profile.filt.csv | cut -f1 | srun filterbyname.sh in=/srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz -names=/dev/stdin ow=t prefix=f include=t out=istA.uniprot.faa 2>istA.filter.err
+
+srun --cpus-per-task 4 hmmsearch --cpu 4 --cut_ga -o /dev/null --tblout istA.uniprot_search_pfam.csv /srv/databases/internal/hmm/Pfam-A.hmm.gz istA.uniprot.faa &
+grep -v "^#" istA.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istA.uniprot_search_pfam.filt.csv
+
+./assign_GA.R --png istA.scores.png --out istA.good_seqs.txt istA.uniprot_search_profile.filt.csv istA.uniprot_search_pfam.filt.csv
+#Found 15559 total hits, of which -
+#	 12440 were hits to both
+#	 3119 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 179.1 173.2 
+#	TC: 179.2 173.3 
+#	NC: 178.9 173.1
+
+## tnsB
+srun --cpus-per-task 4 hmmsearch --cpu 4 -E 0.1 -o /dev/null --tblout tnsB.uniprot_search_profile.csv tnsB.hmm /srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz &
+grep -v "^#" tnsB.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnsB.uniprot_search_profile.filt.csv
+
+grep -v "^#" tnsB.uniprot_search_profile.filt.csv | cut -f1 | srun filterbyname.sh in=/srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz -names=/dev/stdin ow=t prefix=f include=t out=tnsB.uniprot.faa 2>tnsB.filter.err
+
+srun --cpus-per-task 4 hmmsearch --cpu 4 --cut_ga -o /dev/null --tblout tnsB.uniprot_search_pfam.csv /srv/databases/internal/hmm/Pfam-A.hmm.gz tnsB.uniprot.faa &
+grep -v "^#" tnsB.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnsB.uniprot_search_pfam.filt.csv
+
+./assign_GA.R --png tnsB.scores.png --out tnsB.good_seqs.txt tnsB.uniprot_search_profile.filt.csv tnsB.uniprot_search_pfam.filt.csv
+#Found 2729 total hits, of which -
+#	 2402 were hits to both
+#	 327 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 73.7 76.1 
+#	TC: 73.8 76.6 
+#	NC: 73.5 76
+
+## tniA
+srun --cpus-per-task 4 hmmsearch --cpu 4 -E 0.1 -o /dev/null --tblout tniA.uniprot_search_profile.csv tniA.hmm /srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz &
+grep -v "^#" tniA.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniA.uniprot_search_profile.filt.csv
+
+grep -v "^#" tniA.uniprot_search_profile.filt.csv | cut -f1 | srun filterbyname.sh in=/srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz -names=/dev/stdin ow=t prefix=f include=t out=tniA.uniprot.faa 2>tniA.filter.err
+
+srun --cpus-per-task 4 hmmsearch --cpu 4 --cut_ga -o /dev/null --tblout tniA.uniprot_search_pfam.csv /srv/databases/internal/hmm/Pfam-A.hmm.gz tniA.uniprot.faa &
+grep -v "^#" tniA.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniA.uniprot_search_pfam.filt.csv
+
+./assign_GA.R --png tniA.scores.png --out tniA.good_seqs.txt tniA.uniprot_search_profile.filt.csv tniA.uniprot_search_pfam.filt.csv
+#Found 8278 total hits, of which -
+#	 7753 were hits to both
+#	 525 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 218.9 218.2 
+#	TC: 219 218.3 
+#	NC: 218.7 218.1
+
+## intI
+srun --cpus-per-task 4 hmmsearch --cpu 4 -E 0.1 -o /dev/null --tblout intI.uniprot_search_profile.csv intI.hmm /srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz &
+grep -v "^#" intI.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >intI.uniprot_search_profile.filt.csv
+
+grep -v "^#" intI.uniprot_search_profile.filt.csv | cut -f1 | srun filterbyname.sh in=/srv/databases/proteins/UniProt-2017_12/uniref/uniref90/uniref90.fasta.gz -names=/dev/stdin ow=t prefix=f include=t out=intI.uniprot.faa 2>intI.filter.err
+
+srun --cpus-per-task 4 hmmsearch --cpu 4 --cut_ga -o /dev/null --tblout intI.uniprot_search_pfam.csv /srv/databases/internal/hmm/Pfam-A.hmm.gz intI.uniprot.faa &
+grep -v "^#" intI.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >intI.uniprot_search_pfam.filt.csv
+
+./assign_GA.R --png intI.scores.png --out intI.good_seqs.txt intI.uniprot_search_profile.filt.csv intI.uniprot_search_pfam.filt.csv
+#Found 105580 total hits, of which -
+#	 104942 were hits to both
+#	 638 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 207.7 205.8 
+#	TC: 207.8 205.9 
+#	NC: 207.6 205.7
+
+#######################
+### Combine entries ###
+#######################
+
+## Pfam HMMs
+hmmfetch -f -o pfam_hmms.LIB /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm pfam_hmms.txt
+
+cat pfam_hmms.LIB istA.hmm tniA.hmm tnsB.hmm intI.hmm >MGEfam.LIB
+
+reldb --in-csv --prepend "Dbxref:Pfam:" --extend "database:MGEfam v1" --out MGEfam.json --fields "Dbxref,gene,product,family_type,family,mge_type,description,source" MGEfam.meta.tsv
+
+
+################
+### istB HMM ###
+################
+
+### HMM profile for istB already exists in Pfam database in the form of 
+### entries IstB_IS21 and IstB_IS21_ATP
+
+## 0. Download the data
+esearch -db protein -query "istB[All Fields] AND ((bacteria[filter] OR archaea[filter] OR virus[filter]) AND refseq[filter]" | efetch -format fasta > istB.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' istB.faa
+
+# Cluster duplicate sequences
+cd-hit -i istB.faa -o istB.unq.faa -c 1 -g 1 -d 0
+# total seq: 1414
+# longest and shortest : 767 and 31
+# Total letters: 484237
+# 1414  finished        536  clusters
+
+# Remove very divergent and very similar sequences (less than 20% identity to other sequences or greater than 80% identity)
+t_coffee -other_pg seq_reformat -in istB.unq.faa -action +trim _seq_%%80_O20 >istB.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino istB.unq.trim.faa >istB.unq.trim.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -infile=istB.unq.trim.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' istB.unq.trim.mafft.score_ascii >istB.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+./sCORE_dist.R --infile istB.sCORE.csv --png istB.sCORE.png
+value=  #threshold value
+
+bad_seqs=$(awk -v threshold=80 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 < threshold) {print $1}}' istB.unq.trim.mafft.score_ascii)  #extract sequences that may harm accuracy of the alignment
+
+good_seqs=$(awk -v threshold=80 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' istB.unq.trim.mafft.score_ascii)  #extract all sequences likely to belong in family of interest (i.e. those with score considered average or good)
+
+best_seqs=($(awk -v threshold=82 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' istB.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+filterbyname.sh in=istB.unq.trim.faa -names=$(IFS=","; shift; echo "'${best_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=istB.unq.trim.best.faa
+
+## 4. Create the seed alignment:
+t_coffee -other_pg seq_reformat -in istB.unq.trim.best.faa -action +trim _seq_n40 -output fasta_seq >istB.unq.trim.best.top40.faa  #extract the 40 most informative sequences for alignment
+
+t_coffee -n_core=3 -in istB.unq.trim.best.top40.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name istB.unq.trim.tcoffee.best.top40  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile istB.unq.trim.tcoffee.best.fasta_aln -evaluate -output tcs_residue_filter3
+
+t_coffee -infile istB.unq.trim.tcoffee.best.tcs_residue_filter3 -evaluate -output=score_ascii,score_html
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o istB.unq.trim.tcoffee.best.tcs_column_filter3.sto --mingap stockholm istB.unq.trim.tcoffee.best.tcs_residue_filter3
+
+hmmbuild --amino -n istB istB.hmm istB.unq.trim.tcoffee.best.tcs_column_filter3.sto
+
+## 7. Align SwissProt proteins to profile HMM:
+hmmsearch -E 0.001 --tblout istB.sprot_search_profile.csv -o istB.sprot_search_profile.log istB.hmm /home/cthornton/Projects/databases/SwissProt/sprot.faa
+
+grep -v "^#" istB.sprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istB.sprot_search_profile.filt.csv
+
+sp=($(grep -v "^#" istB.sprot_search_profile.filt.csv | cut -f1))
+filterbyname.sh in=/home/cthornton/Projects/databases/SwissProt/sprot.faa -names=$(IFS=","; shift; echo "'${sp[*]}'") ignorejunk=t ow=t prefix=t include=t out=istB.sprot.faa  #extract IDs to search against Pfam
+
+## 8. Align sequences from NCBI to profile HMM:
+hmmsearch --tblout istB.all_search_profile.csv -o istB.all_search_profile.log istB.hmm istB.unq.faa
+
+grep -v "^#" istB.all_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istB.all_search_profile.filt.csv
+
+## 9. Align remaining good sequences and swissprot matches to Pfam and compare bitscores with closest Pfam family
+hmmsearch --cpu 3 --tblout istB.all_search_pfam.csv -o istB.all_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm istB.unq.faa 2>istB.hmmer.log
+
+grep -v "^#" istB.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istB.all_search_pfam.filt.csv
+
+hmmsearch --cpu 3 --tblout istB.sprot_search_pfam.csv -o istB.sprot_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm istB.sprot.faa 2>>istB.hmmer.log
+
+grep -v "^#" istB.sprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >istB.sprot_search_pfam.filt.csv
+
+cat istB.all_search_profile.filt.csv istB.sprot_search_profile.filt.csv >istB.search_profile.filt.csv
+cat istB.all_search_pfam.filt.csv istB.sprot_search_pfam.filt.csv >istB.search_pfam.filt.csv
+
+## 10. Determine threshold values
+./assign_GA.R --png istB.scores.png --out istB.good_seqs.txt istB.search_profile.filt.csv istB.search_pfam.filt.csv
+#Found 1504 total hits, of which -
+#	 1469 were hits to both
+#	 11 were hits unique to custom profile
+#	 24 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 225.6 225.4 
+#	TC: 228.1 227.9 
+#	NC: 225.3 224.8
+
+# Graph and threshold values suggest that Pfam entries IstB_IS21 and 
+# IstB_IS21_ATP should be incorporated into MGEfam
+
+
+################
+### TniA HMM ###
+################
+
+## 0. Download the data
+esearch -db protein -query "tniA[All Fields] AND refseq[filter]" | efetch -format fasta >tniA.refseq.faa
+esearch -db protein -query "tniA[All Fields]" | efetch -format fasta >tniA.all.faa
+
+## 1. Pre-processing
+# Cluster duplicate sequences
+cd-hit -i tniA.refseq.faa -o tniA.refseq.unq.faa -c 1 -g 1 -d 0
+cd-hit -i tniA.all.faa -o tniA.all.unq.faa -c 1 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% identity to other sequences)
+t_coffee -other_pg seq_reformat -in tniA.refseq.unq.faa -action +trim _seq_O20 >tniA.refseq.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino tniA.refseq.unq.trim.faa >tniA.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -infile=tniA.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' tniA.mafft.score_ascii >tniA.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+../sCORE_dist.R --infile tniA.sCORE.csv --png tniA.sCORE.png
+
+bad_seqs=$(awk -v threshold=60 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 < threshold) {print $1}}' tniA.mafft.score_ascii)  #extract sequences that may harm accuracy of the alignment
+
+best_seqs=($(awk -v threshold=60 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tniA.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+awk -v threshold=60 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tniA.mafft.score_ascii | filterbyname.sh in=tniA.refseq.unq.trim.faa -names=/dev/stdin ignorejunk=t ow=t prefix=f include=t out=tniA.seed.faa
+
+## 4. Create the seed alignment:
+t_coffee -n_core=3 -in tniA.seed.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name tniA.seed.  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -n_core=3 -infile tniA.seed.fasta_aln -evaluate -output tcs_residue_filter3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tniA.seed.tcs_residue_filter3.sto --mingap stockholm tniA.seed.tcs_residue_filter3
+
+hmmbuild --amino -n tniA tniA.hmm tniA.seed.tcs_residue_filter3.sto
+
+## 7. Compare custom profile with Pfam using independent test dataset to determine threshold values:
+hmmsearch --cpu 3 -o /dev/null --tblout tniA.uniprot_search_profile.csv tniA.hmm uniprot-tniA.fasta
+grep -v "^#" tniA.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniA.uniprot_search_profile.filt.csv
+
+hmmsearch --cpu 3 -o /dev/null --tblout uni_search_pfam.csv /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm uniprot-tniA.fasta
+grep -v "^#" tniA.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniA.uniprot_search_pfam.filt.csv
+
+## 8. Determine threshold values
+../assign_GA.R --png tniA.scores.png --out tniA.good_seqs.txt tniA.uniprot_search_profile.filt.csv tniA.uniprot_search_pfam.filt.csv
+#Found 372 total hits, of which -
+#	 341 were hits to both
+#	 6 were hits unique to custom profile
+#	 25 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 39.7 39.4 
+#	TC: 40 39.7 
+#	NC: 13.7 13.5 
+
+## 11.  Extract matching sequences from Sprot for inclusion into final alignment:
+sprot=($(awk -v sga=50.3 -v dga=50.2 '{if($3 > sga && $4 > dga) {print $1}}' tniA.sprot_search_profile.filt.csv))  #extract Sprot sequences likely to belong in family of interest
+filterbyname.sh in=tniA.sprot.faa -names=$(IFS=","; shift; echo "'${sprot[*]}'") ignorejunk=t ow=t prefix=t include=t out=tniA.sprot.good.faa  #extract refseq IDs of sequences passing gathering threshold
+
+cat tniA.sprot.good.faa tniA.unq.trim.best.faa >tniA.final.faa
+
+## 12. Generate final MSA:
+mafft --localpair --maxiterate 1000 --amino tniA.final.faa >tniA.final.aln
+
+t_coffee -infile tniA.final.aln -evaluate -output tcs_residue_filter3,score_ascii,score_html
+
+## 13. Build final database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tniA.final.sto --mingap stockholm tniA.final.tcs_residue_filter3
+
+hmmbuild --amino -n tniA tniA.final.hmm tniA.final.sto
+hmmstat tniA.hmm
+# idx  name                 accession        nseq eff_nseq      M relent   info p relE compKL
+# ---- -------------------- ------------ -------- -------- ------ ------ ------ ------ ------
+#1      tniA                 -                  40     4.24    403   0.59   0.57   0.48   0.02
+hmmstat tniA.final.hmm
+# idx  name                 accession        nseq eff_nseq      M relent   info p relE compKL
+# ---- -------------------- ------------ -------- -------- ------ ------ ------ ------ ------
+#1      tniA                 -                  88     4.52    451   0.59   0.57   0.49   0.03
+
+
+################
+### TniB HMM ###
+################
+
+### HMM profile for TniB already exists in Pfam database
+
+## 0. Download the data
+esearch -db protein -query "tniB[All Fields] AND refseq[filter]" | efetch -format fasta >tniB.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' tniB.faa
+
+# Cluster duplicate sequences
+cd-hit -i tniB.faa -o tniB.unq.faa -c 1 -g 1 -d 0
+
+## 2. Search sequences against Pfam database
+hmmsearch --cpu 3 --cut_ga --tblout tniB.all_search_pfam.csv -o /dev/null /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tniB.unq.faa
+
+grep -v "^#" tniB.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | sort --parallel=1 --buffer-size=14G -k6,6gr -k9,9gr | awk '{print $3"\t"$6}' | head
+#TniB	275.7
+#TniB	273.5
+#TniB	272.9
+#TniB	271.8
+#TniB	271.4
+#TniB	271.1
+#TniB	270.4
+#TniB	270.0
+#TniB	270.0
+#TniB	269.9
+
+# Pfam appears to have a decent enough profile already
+
+
+################
+### TniQ HMM ###
+################
+
+### HMM profile for TniQ already exists in Pfam database
+
+## 0. Download the data
+esearch -db protein -query "tniQ[All Fields] AND (refseq[filter]" | efetch -format fasta >tniQ.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' tniQ.faa
+
+# Cluster duplicate sequences
+cd-hit -i tniQ.faa -o tniQ.unq.faa -c 1 -g 1 -d 0
+
+## 2. Search sequences against Pfam database
+hmmsearch --cpu 3 --cut_ga --tblout tniQ.all_search_pfam.csv -o /dev/null /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tniQ.unq.faa
+
+grep -v "^#" tniQ.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | sort --parallel=1 --buffer-size=14G -k6,6gr -k9,9gr | awk '{print $3"\t"$6}' | head
+#TnsD	344.6
+#TniQ	93.8
+#TniQ	92.2
+#TniQ	92.2
+#TnsD	88.9
+#TniQ	88.2
+#TniQ	87.2
+#TniQ	86.8
+#TniQ	84.7
+#TniQ	83.4
+
+# None of the scores are very high. Might be beneficial to create new profile anyway
+
+# Remove very divergent and very similar sequences (less than 20% identity to other sequences)
+t_coffee -other_pg seq_reformat -in tniQ.unq.faa -action +trim _seq_%%80_O20 >tniQ.unq.trim.faa
+
+
+##################
+### TniC/R HMM ###
+##################
+
+## 0. Download the data
+esearch -db protein -query "tniR[All Fields] AND plasmid[filter] AND bacteria[filter]" | efetch -format fasta >tniR.faa
+esearch -db protein -query "tniC[All Fields] AND plasmid[filter] AND bacteria[filter]" | efetch -format fasta >tniC.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' tniR.faa
+sed -i '/^\s*$/d' tniC.faa
+
+# Cluster duplicate sequences
+cd-hit -i tniR.faa -o tniR.unq.faa -c 1 -g 1 -d 0
+cd-hit -i tniC.faa -o tniC.unq.faa -c 1 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% identity to other sequences)
+t_coffee -other_pg seq_reformat -in tniR.unq.faa -action +trim _seq_O20 >tniR.unq.trim.faa
+t_coffee -other_pg seq_reformat -in tniC.unq.faa -action +trim _seq_O20 >tniC.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino tniR.unq.trim.faa >tniR.unq.trim.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -infile=tniR.unq.trim.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' tniR.unq.trim.mafft.score_ascii >tniR.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+./sCORE_dist.R --infile tniR.sCORE.csv --png tniR.sCORE.png
+
+best_seqs=($(awk -v threshold=80 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tniR.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+filterbyname.sh in=tniR.unq.trim.faa -names=$(IFS=","; shift; echo "'${best_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=tniR.unq.trim.best.faa
+#Reads Processed:          31 	0.37k reads/sec
+#Bases Processed:        5933 	0.07m bases/sec
+#Reads Out:          31
+#Bases Out:          5933
+
+## 4. Create the seed alignment:
+#t_coffee -other_pg seq_reformat -in tniR.unq.trim.best.faa -action +trim _seq_n40 -output fasta_seq >tniR.unq.trim.best.top40.faa  #skipped as only 31 sequences remaining
+
+t_coffee -n_core=3 -in tniR.unq.trim.best.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name tniR.unq.trim.tcoffee.best  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile tniR.unq.trim.tcoffee.fasta_aln -evaluate -output tcs_residue_column3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tniR.unq.trim.tcoffee.tcs_residue_couln3.sto --mingap stockholm tniR.unq.trim.tcoffee.tcs_residue_column3
+
+hmmbuild --amino -n tniR tniR.hmm tniR.unq.trim.tcoffee.tcs_residue_column3.sto
+hmmstat tniR.hmm
+# idx  name                 accession        nseq eff_nseq      M relent   info p relE compKL
+# ---- -------------------- ------------ -------- -------- ------ ------ ------ ------ ------
+#1      tniR                 -                  31     0.98    204   0.59   0.62   0.52   0.03
+
+hmmsearch --cpu 3 --tblout /dev/stdout -o /dev/null tniR.hmm tniC.unq.trim.faa
+
+## 7. Align SwissProt proteins to profile HMM:
+hmmsearch -E 0.001 --tblout tniR.sprot_search_profile.csv -o tniR.sprot_search_profile.log tniR.hmm /home/cthornton/Projects/databases/SwissProt/sprot.faa
+
+grep -v "^#" tniR.sprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniR.sprot_search_profile.filt.csv
+
+sp=($(grep -v "^#" tniR.sprot_search_profile.filt.csv | cut -f1))
+filterbyname.sh in=/home/cthornton/Projects/databases/SwissProt/sprot.faa -names=$(IFS=","; shift; echo "'${sp[*]}'") ignorejunk=t ow=t prefix=t include=t out=tniR.sprot.faa  #extract IDs to search against Pfam
+
+## 8. Align sequences from NCBI to profile HMM:
+hmmsearch --tblout tniR.all_search_profile.csv -o tniR.all_search_profile.log tniR.hmm tniR.unq.faa
+
+grep -v "^#" tniR.all_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniR.all_search_profile.filt.csv
+
+## 9. Align remaining good sequences and swissprot matches to Pfam and compare bitscores with closest Pfam family
+hmmsearch --cpu 3 --tblout tniR.all_search_pfam.csv -o tniR.all_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tniR.unq.faa 2>tniR.hmmer.log
+
+grep -v "^#" tniR.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniR.all_search_pfam.filt.csv
+
+hmmsearch --cpu 3 --tblout tniR.sprot_search_pfam.csv -o tniR.sprot_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tniR.sprot.faa 2>>tniR.hmmer.log
+
+grep -v "^#" tniR.sprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tniR.sprot_search_pfam.filt.csv
+
+cat tniR.all_search_profile.filt.csv tniR.sprot_search_profile.filt.csv >tniR.search_profile.filt.csv
+cat tniR.all_search_pfam.filt.csv tniR.sprot_search_pfam.filt.csv >tniR.search_pfam.filt.csv
+
+## 10. Determine threshold values
+./assign_GA.R --png tniR.scores.png --out tniR.good_seqs.txt tniR.search_profile.filt.csv tniR.search_pfam.filt.csv
+#Found 67 total hits, of which -
+#	 66 were hits to both
+#	 0 were hits unique to custom profile
+#	 1 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 148.9 145.9 
+#	TC: 160.5 148.7 
+#	NC: 146 129.8 
+
+# Complicated graph. Looks like there is considerable overlap with Pfam's 
+# resolvase entry, which makes sense as tniR and tniC are resolvases. Suggest
+# to incorporate both resolvase entry of Pfam and the more specific tniC/R
+# custom profile HMM. Resolvases are involved in transposition of genes in
+# transposons and plasmids both.
+
+## 11. Extract sequences from tniC and sprot for inclusion into model
+tniC=($(awk -v sga=148.9 -v dga=145.9 '{if($3 > sga && $4 > dga) {print $1}}' tniC.all_search_profile.filt.csv))  #extract tniC sequences likely to belong in family of interest
+filterbyname.sh in=tniC.faa -names=$(IFS=","; shift; echo "'${tniC[*]}'") ignorejunk=t ow=t prefix=t include=t out=tniC.good.faa  #extract refseq IDs of sequences passing gathering threshold
+
+sprot=($(awk -v sga=148.9 -v dga=145.9 '{if($3 > sga && $4 > dga) {print $1}}' tniR.sprot_search_profile.filt.csv))  #extract sprot sequences likely to belong in family of interest
+filterbyname.sh in=tniR.sprot.faa -names=$(IFS=","; shift; echo "'${sprot[*]}'") ignorejunk=t ow=t prefix=t include=t out=tniR.sprot.good.faa  #extract refseq IDs of sequences passing gathering threshold
+
+cat tniC.good.faa tniR.sprot.good.faa tniR.unq.trim.best.faa >tniR.final.faa
+
+## 12. Generate final MSA:
+mafft --localpair --maxiterate 1000 --amino tniR.final.faa >tniR.final.aln
+
+t_coffee -infile tniR.final.aln -evaluate -output tcs_residue_filter3,score_ascii,score_html
+
+## 13. Build final database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tniR.final.sto --mingap stockholm tniR.final.tcs_residue_filter3
+
+hmmbuild --amino -n tniR tniR.final.hmm tniR.final.sto
+hmmstat tniR.hmm
+# idx  name                 accession        nseq eff_nseq      M relent   info p relE compKL
+# ---- -------------------- ------------ -------- -------- ------ ------ ------ ------ ------
+#1      tniR                 -                  31     0.98    204   0.59   0.62   0.52   0.03
+hmmstat tniR.final.hmm
+# idx  name                 accession        nseq eff_nseq      M relent   info p relE compKL
+# ---- -------------------- ------------ -------- -------- ------ ------ ------ ------ ------
+#1      tniR                 -                  44     0.94    200   0.59   0.62   0.52   0.04
+
+
+################
+### TnsB HMM ###
+################
+
+## 0. Download the data
+esearch -db protein -query "tnsB[All Fields] AND bacteria[filter] AND refseq[filter]" | efetch -format fasta >tnsB.refseq.faa
+esearch -db protein -query "tnsB[All Fields] AND bacteria[filter]" | efetch -format fasta >tnsB.all.faa
+
+## 1. Pre-processing
+# Cluster duplicate sequences
+cd-hit -i tnsB.refseq.faa -o tnsB.refseq.unq.faa -c 1 -g 1 -d 0
+cd-hit -i tnsB.all.faa -o tnsB.all.unq.faa -c 1 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% and greater)
+t_coffee -other_pg seq_reformat -in tnsB.refseq.unq.faa -action +trim _seq_O20 >tnsB.refseq.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino tnsB.refseq.unq.trim.faa >tnsB.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -infile=tnsB.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' tnsB.mafft.score_ascii >tnsB.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+../sCORE_dist.R --infile tnsB.sCORE.csv --png tnsB.sCORE.png
+
+best_seqs=($(awk -v threshold=70 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tnsB.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+awk -v threshold=70 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tnsB.mafft.score_ascii | filterbyname.sh in=tnsB.refseq.unq.trim.faa -names=/dev/stdin ignorejunk=t ow=t prefix=f include=t out=tnsB.seed.faa
+
+## 4. Create the seed alignment:
+t_coffee -n_core=3 -in tnsB.seed.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name tnsB.seed.  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile tnsB.seed.fasta_aln -evaluate -output tcs_residue_filter3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tnsB.seed.tcs_residue_filter3.sto --mingap stockholm tnsB.seed.tcs_residue_filter3
+
+hmmbuild --amino -n tnsB tnsB.hmm tnsB.seed.tcs_residue_filter3.sto
+
+## 7. Compare custom profile and Pfam using independent test dataset to determine threshold values:
+hmmsearch --cpu 3 -o /dev/null --tblout tnsB.uniprot_search_profile.csv tnsB.hmm uniprot-tnsB.fasta
+grep -v "^#" tnsB.uniprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnsB.uniprot_search_profile.filt.csv
+
+hmmsearch --cpu 3 -o /dev/null --tblout uni_search_pfam.csv /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm uniprot-tnsB.fasta
+grep -v "^#" tnsB.uniprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnsB.uniprot_search_pfam.filt.csv
+
+## 8. Determine threshold values
+../assign_GA.R --png tnsB.scores.png --out tnsB.good_seqs.txt tnsB.uniprot_search_profile.filt.csv tnsB.uniprot_search_pfam.filt.csv
+#Found 499 total hits, of which -
+#	 438 were hits to both
+#	 27 were hits unique to custom profile
+#	 34 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 68.2 67.3 
+#	TC: 68.3 67.9 
+#	NC: 67.1 66.7
+
+################
+### intI HMM ###
+################
+
+## 0. Download the data from NCBI and Cambray et al. Mobile DNA, 2011
+esearch -db protein -query "(integron integrase[Protein Name] OR (integron[All Fields] AND integrase[All Fields])) AND refseq[filter]" | efetch -format fasta >intI.refseq.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' intI.faa
+
+# Cluster duplicate sequences
+cd-hit -i intI.faa -o intI.unq.faa -c 0.8 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% and greater than 80% identity to other sequences)
+t_coffee -other_pg seq_reformat -in intI.unq.faa -action +trim _seq_%%80_O20 >intI.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino intI.unq.trim.faa >intI.unq.trim.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -other_pg seq_reformat -in intI.unq.trim.mafft.aln -action +trim _seq_%%100 >intI.unq.trim.mafft.unq.aln  #remove duplicates
+
+t_coffee -n_core=2 -infile=intI.unq.trim.mafft.unq.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' intI.unq.trim.mafft.score_ascii >intI.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+./sCORE_dist.R --infile intI.sCORE.csv --png intI.sCORE.png
+
+best_seqs=($(awk -v threshold=80 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' intI.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+filterbyname.sh in=intI.unq.trim.faa -names=$(IFS=","; shift; echo "'${best_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=intI.unq.trim.best.faa
+
+## 4. Create the seed alignment:
+t_coffee -other_pg seq_reformat -in intI.unq.trim.best.faa -action +trim _seq_n40 -output fasta_seq >intI.unq.trim.best.top40.faa  #extract the 40 most informative sequences for alignment
+
+t_coffee -n_core=3 -in intI.unq.trim.best.top40.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name intI.unq.trim.tcoffee.best.top40  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile intI.unq.trim.tcoffee.best.fasta_aln -evaluate -output tcs_residue_filter3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o intI.unq.trim.tcoffee.best.tcs_column_filter3.sto --mingap stockholm intI.unq.trim.tcoffee.best.tcs_residue_filter3
+
+hmmbuild --amino -n intI intI.hmm intI.unq.trim.tcoffee.best.tcs_column_filter3.sto
+
+## 7. Align integron integrases collected from Cambray et al, 2011 to Pfam and custom profile:
+hmmsearch --cpu 3 --tblout intI.cambray_search_pfam.csv -o /dev/null /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm intI.unq.faa
+grep -v "^#" intI.cambray_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >intI.cambray_search_pfam.filt.csv
+
+hmmsearch --cpu 3 --tblout intI.sprot_search_profile.csv -o /dev/null intI.hmm intI.unq.faa
+grep -v "^#" intI.cambray_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >intI.cambray_search_profile.filt.csv
+
+./assign_GA.R --png intI.scores.png --out intI.good_seqs.txt intI.cambray_search_profile.filt.csv intI.cambray_search_pfam.filt.csv
+#Found 415 total hits, of which -
+#	 415 were hits to both
+#	 0 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 122.4 119.6 
+#	TC: 125.5 119.8 
+#	NC: 122.1 119.3 
+
+./assign_GA.R --png intI.scores_tigrfam.png intI.cambray_search_tigrfam.filt.csv intI.cambray_search_pfam.filt.csv
+#Found 415 total hits, of which -
+#	 415 were hits to both
+#	 0 were hits unique to custom profile
+#	 0 were hits unique to Pfam database
+#Suggested scoring thresholds are -
+#	GA: 97.1 129.1 
+#	TC: 97.3 129.7 
+#	NC: 96.3 126.9
+
+################
+### tnpR HMM ###
+################
+
+## 0. Download the data
+esearch -db protein -query "tnpR[All Fields] AND refseq[filter]" | efetch -format fasta >tnpR.faa
+
+## 1. Pre-processing
+# Remove empty lines in FASTA file:
+sed -i '/^\s*$/d' tnpR.faa
+
+# Cluster duplicate sequences
+cd-hit -i tnpR.faa -o tnpR.unq.faa -c 1 -g 1 -d 0
+
+# Remove very divergent and very similar sequences (less than 20% and greater than 80% identity to other sequences)
+t_coffee -other_pg seq_reformat -in tnpR.unq.faa -action +trim _seq_%%80_O20 >tnpR.unq.trim.faa
+
+## 2. Generate initial MSA
+mafft --localpair --maxiterate 1000 --amino tnpR.unq.trim.faa >tnpR.unq.trim.mafft.aln
+
+## 3. Remove sequences with poor sCORE scores from the dataset:
+t_coffee -n_core=3 -infile=tnpR.unq.trim.mafft.aln -evaluate -output=score_ascii,score_html
+
+awk '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {print $1"\t"$3}' tnpR.unq.trim.mafft.score_ascii >tnpR.sCORE.csv  #look at distribution of sequence CORE scores to find outliers
+
+./sCORE_dist.R --infile tnpR.sCORE.csv --png tnpR.sCORE.png
+
+best_seqs=($(awk -v threshold=60 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 > threshold) {print $1}}' tnpR.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+bad_seqs=($(awk -v threshold=60 '/BAD AVG GOOD/{flag=1;next}/cons/{flag=0}flag && !/\*/ {if($3 < threshold) {print $1}}' tnpR.unq.trim.mafft.score_ascii))  #extract best sequences to be used in final alignment
+
+filterbyname.sh in=tnpR.unq.trim.faa -names=$(IFS=","; shift; echo "'${best_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=tnpR.unq.trim.best.faa
+
+## 3.b Determine if sequences either misannotated or if partitioning necessary within gene family
+filterbyname.sh in=tnpR.unq.trim.faa -names=$(IFS=","; shift; echo "'${bad_seqs[*]}'") ignorejunk=t ow=t prefix=t include=t out=stdout.fasta | hmmscan --cpu 1 --cut_ga --tblout tnpR.bad_search_pfam.csv -o /dev/null /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm -
+
+## 4. Create the seed alignment:
+t_coffee -n_core=3 -other_pg seq_reformat -in tnpR.unq.trim.best.faa -action +trim _seq_n40 -output fasta_seq >tnpR.unq.trim.best.top40.faa  #extract the 40 most informative sequences for alignment
+
+t_coffee -n_core=3 -in tnpR.unq.trim.best.top40.faa -type PROTEIN -output score_ascii,score_html,fasta_aln -run_name tnpR.unq.trim.tcoffee.best.top40  #compute the alignment
+
+## 5. Remove residues from MSA with low transitive consistency score (TCS):
+t_coffee -infile tnpR.unq.trim.tcoffee.best.fasta_aln -evaluate -output tcs_residue_filter3
+
+## 6. Build database of profile HMMs from MSA:
+esl-reformat --informat phylip -o tnpR.unq.trim.tcoffee.best.tcs_column_filter3.sto --mingap stockholm tnpR.unq.trim.tcoffee.best.tcs_residue_filter3
+
+hmmbuild --amino -n tnpR tnpR.hmm tnpR.unq.trim.tcoffee.best.tcs_column_filter3.sto
+
+## 7. Align SwissProt proteins to profile HMM:
+hmmsearch -E 0.001 --tblout tnpR.sprot_search_profile.csv -o tnpR.sprot_search_profile.log tnpR.hmm /home/cthornton/Projects/databases/SwissProt/sprot.faa
+
+grep -v "^#" tnpR.sprot_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnpR.sprot_search_profile.filt.csv
+
+sp=($(grep -v "^#" tnpR.sprot_search_profile.filt.csv | cut -f1))
+filterbyname.sh in=/home/cthornton/Projects/databases/SwissProt/sprot.faa -names=$(IFS=","; shift; echo "'${sp[*]}'") ignorejunk=t ow=t prefix=t include=t out=tnpR.sprot.faa  #extract IDs to search against Pfam
+
+## 8. Align sequences from NCBI to profile HMM:
+hmmsearch --tblout tnpR.all_search_profile.csv -o tnpR.all_search_profile.log tnpR.hmm tnpR.unq.faa
+
+grep -v "^#" tnpR.all_search_profile.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnpR.all_search_profile.filt.csv
+
+## 9. Align remaining good sequences and swissprot matches to Pfam and compare bitscores with closest Pfam family
+hmmsearch --cpu 3 --tblout tnpR.all_search_pfam.csv -o tnpR.all_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tnpR.unq.faa 2>tnpR.hmmer.log
+
+grep -v "^#" tnpR.all_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnpR.all_search_pfam.filt.csv
+
+hmmsearch --cpu 3 --tblout tnpR.sprot_search_pfam.csv -o tnpR.sprot_search_pfam.log /home/cthornton/Projects/databases/Pfam-32.0/Pfam-A.hmm tnpR.sprot.faa 2>>tnpR.hmmer.log
+
+grep -v "^#" tnpR.sprot_search_pfam.csv | sort --parallel=1 --buffer-size=14G -k1,1 -k6,6gr -k9,9gr | sort -u --merge -k1,1 | awk '{print $1"\t"$3"\t"$6"\t"$9}' >tnpR.sprot_search_pfam.filt.csv
+
+cat tnpR.all_search_profile.filt.csv tnpR.sprot_search_profile.filt.csv >tnpR.search_profile.filt.csv
+cat tnpR.all_search_pfam.filt.csv tnpR.sprot_search_pfam.filt.csv >tnpR.search_pfam.filt.csv
+
+./assign_GA.R --png tnpR.scores.png --out tnpR.good_seqs.txt tnpR.search_profile.filt.csv tnpR.search_pfam.filt.csv

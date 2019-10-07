@@ -1,0 +1,395 @@
+SITE1="UMC"
+SITE2="MWW"
+
+colocate_features --all -a gene -d $SITE1.dist.tsv -o $SITE1.table.tsv -f $SITE1.contigs.renamed.fa.gz colocate.tsv $SITE1.final.gff
+colocate_features --all -a gene -d $SITE2.dist.tsv -o $SITE2.table.tsv -f $SITE2.contigs.renamed.fa.gz colocate.tsv $SITE2.final.gff
+
+R
+library("ggplot2")
+library("reshape2")
+
+dist1 <- read.csv("UMC.dist.tsv", sep="\t")
+dist1$SiteCode <- "UMC"
+dist2 <- read.csv("MWW.dist.tsv", sep="\t")
+dist2$SiteCode <- "MWW"
+
+summary(subset(dist1, !is.na(Set1) & !is.na(Set2))[, c("SeqLength", "MinDistance")])
+# SeqLength     MinDistance 
+# Min.   :   428   Min.   :    23  
+# 1st Qu.:  2077   1st Qu.:   193  
+# Median :  4574   Median :   557  
+# Mean   : 23908   Mean   :  6152  
+# 3rd Qu.: 15090   3rd Qu.:  4772  
+# Max.   :361295   Max.   :134506
+
+summary(subset(dist2, !is.na(Set1) & !is.na(Set2))[, c("SeqLength", "MinDistance")])
+# SeqLength    MinDistance
+# Min.   :  568   Min.   :   32  
+# 1st Qu.: 4645   1st Qu.:  366  
+# Median : 5900   Median :  934  
+# Mean   :19331   Mean   : 5333  
+# 3rd Qu.:15711   3rd Qu.: 5688  
+# Max.   :99323   Max.   :52373
+
+dist <- rbind(dist1, dist2)
+dist$Group <- NA
+dist[is.na(dist$Set2) & ! is.na(dist$Set1),]$Group <- "RE"
+dist[is.na(dist$Set1) & ! is.na(dist$Set2),]$Group <- "MGE"
+dist[!is.na(dist$Set1) & !is.na(dist$Set2),]$Group <- "Both"
+
+# Contig length (in bp) for contigs containing co-resident REs and MGEs
+summary(subset(dist, Group == "Both")$SeqLength)
+#   Min.  1st Qu.  Median  Mean  3rd Qu.  Max. 
+#   428   3017     5611    21974 15711    361295 
+
+# Contig length (in bp) for contigs containing MGEs and any other gene
+summary(subset(dist, Group == "MGE" & NumFeatures > 1)$SeqLength)
+#   Min.  1st Qu.  Median  Mean  3rd Qu.  Max. 
+#    251     906    1542    3105    2752  210875 
+
+# Contig length (in bp) for contigs containing REs and any other gene
+summary(subset(dist, Group == "RE" & NumFeatures > 1)$SeqLength)
+#   Min.  1st Qu.  Median  Mean  3rd Qu.  Max. 
+#    209     763    1462    4081    3542  306394
+
+# Contig length (in bp) for contigs containing only MGEs
+summary(subset(dist, Group == "MGE")$SeqLength)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#    200     434     717    1672    1418  361295
+
+# Contig length (in bp) for contigs containing only REs
+summary(subset(dist, Group == "RE")$SeqLength)
+#    Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+#   200.0    408.0    699.5   2545.7   1702.2 361295.0
+
+# Minimum distance (in bp) between co-resident REs and MGEs
+summary(subset(dist, Group == "Both")$MinDistance)
+#   Min.  1st Qu.  Median  Mean  3rd Qu.  Max. 
+#   23    229      668     5806  5688     134506 
+
+dist$Counts <- NA
+dist[dist$NumFeatures == 1,]$Counts <- "1"
+dist[dist$NumFeatures > 1,]$Counts <- ">1"
+dist$Counts <- factor(dist$Counts, levels=c("1", ">1"))
+
+png("all.length.type.png", height=600, width=1000)
+ggplot(dist, aes(x=as.factor(Group), y=log10(SeqLength))) + geom_boxplot(fill="grey", alpha=0.5) + theme_bw() + my_theme + theme(axis.title.x=element_blank()) + labs(y="Log10 contig length (bp)") + facet_wrap(~Counts, scales="free_x", labeller=as_labeller(c("1"= "Number cargo features: 1", ">1"="Number cargo features: >1")))
+dev.off()
+
+#dist$Counts <- NA
+#dist[dist$NumFeatures == 1,]$Counts <- "1"
+#dist[dist$NumFeatures == 2,]$Counts <- "2"
+#dist[dist$NumFeatures > 2,]$Counts <- ">2"
+#dist$Counts <- factor(dist$Counts, levels=c("1", "2", ">2"))
+#png("all.length.type.png", height=600, width=1000)
+#ggplot(dist, aes(x=as.factor(Group), y=log10(SeqLength))) + geom_boxplot(fill="grey", alpha=0.5) + theme_bw() + my_theme + theme(axis.title.x=element_blank()) + labs(y="Log10 contig length (bp)") + facet_wrap(~Counts, scales="free_x", labeller=as_labeller(c("1"= "Number cargo features: 1", "2"="Number cargo features: 2", ">2"="Number cargo features: >2")))
+#dev.off()
+
+# The above graph shows that contig length is an important factor determining 
+# how many features can be contained on a contig. There is no difference, 
+# however, in the type of feature contained. This means that a contig 
+# containing both an MGE and an RE is typically neither larger nor smaller
+# than a contig containing an RE with any other type of gene.
+
+dist.both <- subset(dist, Group == "Both")
+summary(dist.both$Set1)
+#     actP APH(6)-Id      arsB      arsR      bepE      cadR     CfxA6      copA 
+#        1         1         1         1         1         2         1         3 
+#     corA      cueO      cusA      czcA      czcD      emrB      EreA      ErmG 
+#        2         1         1         4         2         2         1         1 
+#     galE      lnuF      lptD      mdtC      mdtK      merA      merD      merE 
+#        5         1         2         2         2         4         6         2 
+#     merP      merR     merR1      merT      mexF      mgtA      mphD      msrE 
+#        3         5         1         5         1         1         2         2 
+#   OXA-10      pgpA      ruvB      sodA      sodB      sul2      tcrB      terC 
+#        1         2         2         3         5         1         1         1 
+#  tet(39)      zupT       zur      acnA     EreA2      merF    merT-P      modA 
+#        1         2         1         1         1         1         1         1 
+#    OXA-9      pstA      pstB 
+#        1         1         1
+
+dist.l <- melt(dist.both, id.vars=c("Set1", "Set2", "SiteCode"), measure.vars=c("SeqLength", "MinDistance"), variable.name="Var", value.name="Value")
+
+png("all.length_x_distance.png", height=600, width=1000)
+ggplot(data=dist, aes(x=log10(SeqLength), y=log10(MinDistance))) + geom_point(size=4, alpha=0.6) + theme_bw() + my_theme + labs(x="Log10 contig length (bp)", y="Log10 minimum distance between elements (bp)") + facet_wrap(~SiteCode, scales="free") + geom_smooth(method="lm")
+dev.off()
+
+lm(SeqLength ~ MinDistance, data=subset(dist, ! is.na(MinDistance)))
+
+## Mercury resistance
+mer <- c("merA", "merD", "merE", "merP", "merR", "merR1", "merT", "merF", "merT-P")
+nmer <- nrow(dist.both[dist.both$Set1 %in% mer,])
+nother <- nrow(dist.both[!dist.both$Set1 %in% mer,])
+nmer / (nmer + nother) * 100
+# 28.9%
+ggplot(data=subset(dist.both, Set1 %in% mer), aes(x=MinDistance)) + geom_density(aes(y=..density..), fill="grey") + theme_bw() + my_theme + labs(x="Minimum distance between elements (bp)", y="Frequency")
+
+## Resistance type
+gene_info <- read.csv("/home/cthornton/Projects/WAR/results/urban/amr.gene_info.csv")
+dist.merge <- merge(gene_info[,c("Set1", "DrugClass", "ResistanceType", "Metals")], dist.both, by="Set1")
+
+summary(dist.merge$ResistanceType)
+#  A  AB AMB   B   M  MB 
+#  14   1   4  10  57  11
+
+png("all.distance.res_type.png", height=600, width=1000)
+ggplot(data=subset(dist.merge, ResistanceType %in% c("A", "M", "B")), aes(x=MinDistance)) + geom_density(aes(y=..density..), fill="grey") + theme_bw() + my_theme + labs(x="Minimum distance between elements (bp)", y="Frequency") + facet_wrap(~ResistanceType, scales="free", labeller=as_labeller(c("A"="ARG", "B"="BRG", "M"="MRG")))
+dev.off()
+
+png("all.distance-length.arg.png", height=600, width=1000)
+ggplot(data=subset(merge(gene_info[,c("ID", "ResistanceType")], dist.l, by="ID"), ResistanceType %in% c("A", "AB", "AM", "AMB")), aes(x=Value)) + geom_density(fill="grey") + facet_wrap(~Var, scales="free", labeller=as_labeller(c("ContigLength"="Contig length (bp)", "MinimumDistance"="Minimum distance between features (bp)"))) + theme_bw() + my_theme + theme(axis.title.x=element_blank()) + labs(y="Frequency")
+dev.off()
+
+# Notes:
+# 1. The vast majority of instances of co-residence are found on contigs 
+# smaller than 16,000bp, and with co-resident elements (AMRs and MGEs) within 
+# a short distance  of each other (<6,000bp).
+# 2. The larger the contig, the more likely that co-resident elements will
+# be farther apart, perhaps suggesting that these elements are not actually 
+# associated (associated meaning that one element is mobilizing the other). It
+# could be that the shorter contigs containing these co-resident elements are 
+# plasmid-encoded, as plasmid DNA is notoriously difficult to assemble (hence 
+# the shorter contig-lengths).
+# 3. Fully one-third of all instances of co-residence involve mercury 
+# resistance genes. These same genes were also found to be commonly associated with
+# mobile elements (particularly ISCRs and intIs) on plasmids in Pal et al., 2015
+# 4. Most co-resident ARGs and MGEs were within 1000 bp of each other. 
+
+## Logistic Regression
+# Want to know if some ARGs occur more often together with an MGE than would 
+# be expected by chance after correcting for the effects of contig length. Can
+# use logistic regression
+nrow(subset(dist, !is.na(Set1)))  #instances of ARG: 7618
+nrow(subset(dist, !is.na(Set1) & NumFeatures > 1))  #instances of ARG with any other gene: 1605
+nrow(subset(dist, !is.na(Set1) & !is.na(Set2)))  #instances of ARG with MGE: 56
+
+dist.occur <- data.frame(SeqLength=dist$SeqLength, nCargo=dist$NumFeatures, has_arg=ifelse(!is.na(dist$Set1), 1, 0), has_mge=ifelse(!is.na(dist$Set2), 1, 0), has_other=ifelse(!is.na(dist$Set2) & is.na(dist$Set1) & dist$NumFeatures > 1, 1, 0), has_both=ifelse(!is.na(dist$Set1) & !is.na(dist$Set2), 1, 0))
+
+png("contig_length.facet.png", height=600, width=1000)
+ggplot(subset(melt(subset(dist.occur, nCargo > 1), id.vars="SeqLength", measure.vars=c("has_arg", "has_mge", "has_both")), value == 1), aes(x=SeqLength/1000)) + geom_density(fill="grey") + facet_wrap(~variable, scales="free", labeller=as_labeller(c("has_arg"="ARG", "has_mge"="MGE", "has_both"="ARG+MGE"))) + theme_bw() + my_theme + labs(x="Contig length (kb)", y="Frequency")
+dev.off()
+
+png("contig_length.facet.xlim100.png", height=600, width=1000)
+ggplot(subset(melt(subset(dist.occur, nCargo > 1), id.vars="SeqLength", measure.vars=c("has_arg", "has_mge", "has_both")), value == 1), aes(x=SeqLength/1000)) + geom_density(fill="grey") + facet_wrap(~variable, scales="free", labeller=as_labeller(c("has_arg"="ARG", "has_mge"="MGE", "has_both"="ARG+MGE"))) + theme_bw() + my_theme + labs(x="Contig length (kb)", y="Frequency") + xlim(0, 100)
+dev.off()
+
+# Two-way contingency table of categorical outcome and predictors. Want to 
+# ensure there are no 0 cells
+table(dist.occur[, c("has_arg", "has_mge")])
+#       has_mge
+#has_arg      0      1
+#      0 355819  28999
+#      1   7562     56
+
+table(subset(dist.occur, nCargo > 1)[, c("has_arg", "has_mge")])
+#       has_mge
+#has_arg     0     1
+#      0 40888  3722
+#      1  1549    56
+
+40888/355819  #~12% of other genes are on contigs containing more than one feature
+3722/28999  #~13% of MGEs are on contigs containing more than one feature
+1549/7562  #~20% of ARGs are on contigs containing more than one feature
+
+quantile(dist.occur$SeqLength,c(0.95,0.99,0.999,0.9999))
+#      95%       99%     99.9%    99.99% 
+#  4492.00  13623.65  45208.80 109646.71
+
+lr.mge <- glm(has_mge ~ SeqLength, data=subset(dist.occur, nCargo > 1), family="binomial") 
+summary(lr.mge)
+#Deviance Residuals: 
+#    Min       1Q   Median       3Q      Max  
+#-0.7943  -0.4123  -0.4103  -0.4095   2.2460  
+#
+#Coefficients:
+#              Estimate Std. Error  z value Pr(>|z|)    
+#(Intercept) -2.440e+00  1.856e-02 -131.437  < 2e-16 ***
+#SeqLength    4.726e-06  1.615e-06    2.927  0.00343 ** 
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#
+#(Dispersion parameter for binomial family taken to be 1)
+#
+#    Null deviance: 26159  on 46214  degrees of freedom
+#Residual deviance: 26152  on 46213  degrees of freedom
+#AIC: 26156
+#
+#Number of Fisher Scoring iterations: 5
+
+lr.arg <- glm(has_arg ~ SeqLength, data=subset(dist.occur, nCargo > 1), family="binomial")
+summary(lr.arg)
+#Deviance Residuals: 
+#    Min       1Q   Median       3Q      Max  
+#-2.0541  -0.2606  -0.2540  -0.2516   2.6389  
+#
+#Coefficients:
+#              Estimate Std. Error z value Pr(>|z|)    
+#(Intercept) -3.456e+00  2.785e-02 -124.09   <2e-16 ***
+#SeqLength    2.383e-05  1.647e-06   14.47   <2e-16 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#
+#(Dispersion parameter for binomial family taken to be 1)
+#
+#    Null deviance: 13940  on 46214  degrees of freedom
+#Residual deviance: 13755  on 46213  degrees of freedom
+#AIC: 13759
+#
+#Number of Fisher Scoring iterations: 6
+
+dist.predict.mge <- data.frame(SeqLength=seq(200, 300000, by=500))
+dist.predict.mge <- cbind(dist.predict.mge, predict(lr.mge, newdata=dist.predict.mge, type="link", se=TRUE))
+dist.predict.mge <- with(dist.predict.mge, cbind(dist.predict.mge, PredictedProb=plogis(fit), LL=plogis(fit - (1.96 * se.fit)), UL=plogis(fit + (1.96 * se.fit))))
+dist.predict.mge$type <- "MGE"
+
+dist.predict.arg <- data.frame(SeqLength=seq(200, 300000, by=500))
+dist.predict.arg <- cbind(dist.predict.arg, predict(lr.arg, newdata=dist.predict.arg, type="link", se=TRUE))
+dist.predict.arg <- with(dist.predict.arg, cbind(dist.predict.arg, PredictedProb=plogis(fit), LL=plogis(fit - (1.96 * se.fit)), UL=plogis(fit + (1.96 * se.fit))))
+dist.predict.arg$type <- "ARG"
+
+dist.predict.both <- rbind(dist.predict.mge, dist.predict.arg)
+
+png("either_seqlen.logit.png", height=600, width=800)
+ggplot(dist.predict.both, aes(x=SeqLength, y=PredictedProb)) + geom_line(aes(color=type), size=1) + geom_ribbon(aes(ymin=LL, ymax=UL, fill=type), alpha = 0.2) + theme_bw() + my_theme + labs(x="Contig length (bp)", y="Predicted probability")
+dev.off()
+
+smu.len <- rbind(data.frame(with(dist.occur, supsmu(SeqLength, has_mge)), type="MGE"), data.frame(with(dist.occur, supsmu(SeqLength, has_arg)), type="ARG"))
+png("either_seqlen.supersmu.png", height=600, width=800)
+ggplot(smu.len, aes(x=x, y=y, color=type)) + geom_line(size=1) + labs(x="Contig length (bp)", y="Predicted probability") + theme_bw() + my_theme
+dev.off()
+
+#with(subset(dist.occur,SeqLength < 4.0e4),plot(supsmu(SeqLength,as.numeric(has_mge)),ylim=c(1,1.2),type="p",cex=0.4,pch=19,col="blue"))
+#with(dist.occur,points(supsmu(SeqLength,as.numeric(has_arg)),pch=19,cex=0.4,col="red"))
+
+lr <- glm(has_arg ~ has_mge + SeqLength, data=subset(dist.occur, nCargo > 1), family="binomial")
+summary(lr)
+#Deviance Residuals: 
+#    Min       1Q   Median       3Q      Max  
+#-0.4416  -0.2920  -0.2755  -0.2681   2.9606  
+#
+#Coefficients:
+#              Estimate Std. Error z value Pr(>|z|)    
+#(Intercept) -3.480e+00  7.376e-02 -47.175  < 2e-16 ***
+#has_mge1    -1.051e+00  2.553e-01  -4.116 3.86e-05 ***
+#SeqLength    3.003e-05  5.210e-06   5.765 8.18e-09 ***
+#---
+#Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+#
+#(Dispersion parameter for binomial family taken to be 1)
+#
+#    Null deviance: 5528.6  on 16567  degrees of freedom
+#Residual deviance: 5476.5  on 16565  degrees of freedom
+#AIC: 5482.5
+#
+#Number of Fisher Scoring iterations: 6
+
+# Obtain confidence intervals for the coefficient estimates using profiled log-likelihood
+confint(lr)
+#             2.5 %         97.5 %
+#(Intercept) -3.934662e+00 -3.887345e+00
+#has_mge     -2.770230e+00 -2.227193e+00
+#SeqLength    3.206802e-05  3.807116e-05
+
+# Calculate odds-ratios by exponentiating the coefficients
+exp(coef(lr))
+#(Intercept)  has_mge     SeqLength 
+# 0.02002211  0.08316350  1.00003508
+
+# Calculate odds-ratios and their confidence limits
+exp(cbind(OR = coef(lr), confint(lr)))
+#                    OR      2.5 %    97.5 %
+#(Intercept) 0.02002211 0.01955231 0.0204997
+#has_mge     0.08316350 0.06264762 0.1078307
+#SeqLength   1.00003508 1.00003207 1.0000381
+
+# Convert log of odds to probability
+exp(coef(lr)) / (exp(coef(lr)) + 1)
+# (Intercept) has_mge     SeqLength
+# 0.01962909  0.07677834  0.50000877
+
+# Calculate predicted probabilities of a contig containing an ARG with or without an MGE for variable contig lengths.
+minlen <- min(subset(dist.occur, nCargo > 1)$SeqLength)
+maxlen <- max(subset(dist.occur, nCargo > 1)$SeqLength)
+dist.predict <- with(dist.occur, data.frame(SeqLength=rep(seq(minlen, maxlen, by=5000), each=2), has_mge=rep(0:1)))
+
+dist.predict <- cbind(dist.predict, predict(lr, newdata=dist.predict, type="link", se=TRUE))
+dist.predict <- with(dist.predict, cbind(dist.predict, PredictedProb=plogis(fit), LL=plogis(fit - (1.96 * se.fit)), UL=plogis(fit + (1.96 * se.fit))))
+
+png("mge_seqlen.predicted.png", height=600, width=800)
+ggplot(dist.predict, aes(x=SeqLength, y=PredictedProb)) + geom_line(aes(colour=as.factor(has_mge)), size=1) + geom_ribbon(aes(ymin=LL, ymax=UL, fill=as.factor(has_mge)), alpha = 0.2) + theme_bw() + my_theme + labs(x="Contig length (bp)", y="Predicted probability")
+dev.off()
+
+# Calculate predicted probabilities of a contig containing an ARG with or without an MGE for constant contig length
+dist.predict.const <- with(subset(dist.occur, has_arg == 1 & has_mge == 1), data.frame(SeqLength=median(SeqLength), has_mge=0:1))
+dist.predict.const$mgeP <- predict(lr, newdata=dist.predict.const, type="response")
+#  SeqLength has_mge       mgeP
+#1      5611       0 0.03692428
+#2      5611       1 0.01539385
+
+thresh <- dist.predict.const[2, 3]
+
+# REs with frequency of co-occurrence < threshold
+cores_arg <- names(sort(summary(subset(dist, !is.na(Set1) & !is.na(Set2))$Set1), decreasing=TRUE))
+
+obs.dat <- data.frame(freq.obs=sapply(cores_arg, FUN=function(x) nrow(subset(dist, Set1 == x & !is.na(Set2)))/ nrow(subset(dist, Set1 == x))), noccur=sapply(cores_arg, FUN=function(x) nrow(subset(dist, Set1 == x))), ncooccur=sapply(cores_arg, FUN=function(x) nrow(subset(dist, Set1 == x & !is.na(Set2)))), dist.avg=sapply(cores_arg, FUN=function(x) ifelse(nrow(subset(dist, Set1 == x & !is.na(Set2))) > 0, mean(subset(dist, Set1 == x & !is.na(Set2))$MinDistance), 0)))
+
+bad <- cores_arg[which(sapply(cores_arg, FUN=function(x) obs.dat[x, "freq.obs"] < thresh))]
+#pstB pstA acnA
+
+ggplot(subset(dist1, NumFeatures > 2), aes(x=log10(SeqLength))) + geom_density()
+
+summary(subset(dist, Group == "Both")$NumFeatures)
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  2.000   2.000   4.000   5.959   6.000  49.000
+
+## Permutation
+# Want to know the likelihood that a contig containing an MGE will also 
+# contain an RE by chance alone. Can generate probability distributions
+# through permutation and compare to observed frequency of co-occurrence
+
+prob_dist <- function(x, y, niters=1000) {
+  x <- as.factor(x)
+  y <- as.factor(y)
+  denom <- length(which(y == "1"))
+  p.dist <- numeric(niters)
+  for (i in 1:niters) {
+    iter.dat <- data.frame(x=sample(x), y=y)
+    num <- nrow(subset(iter.dat, x == "1" & y == "1"))
+    p <- num / denom
+    p.dist[i] <- p
+  }
+  return(p.dist)
+}
+
+niters <- 10000
+pdist <- prob_dist(dist.occur$has_arg, dist.occur$has_mge, niters)
+
+png("all.prob_dist.png", height=600, width=800)
+ggplot(data.frame(dist=pdist), aes(x=dist)) + geom_density(fill="grey", alpha=0.6) + theme_bw() + my_theme + labs(x="Probability value", y="Density")
+dev.off()
+
+p.obs <- sapply(names(sort(summary(subset(dist, !is.na(Set1) & !is.na(Set2))$Set1), decreasing=TRUE)), FUN=function(x) nrow(subset(dist, Set1 == x & !is.na(Set2)))/ nrow(subset(dist, Set1 == x))) 
+
+results <- data.frame(gene=cores_arg, observed=p.obs, p=sapply(p.obs, FUN=function(x) (length(which(pdist > x)) + 1) / (10000 + 1)))
+subset(results, p < 0.001)$gene
+# [1] czcD      merD      mphD      msrE      tet(39)   cadR      merT     
+# [8] sodA      zur       mexF      APH(6)-Id cueO      EreA      OXA-10   
+#[15] sul2      merR1     merP      merR      merE      ErmG      tcrB     
+#[22] CfxA6     lnuF      OXA-9     merT-P    EreA2     merF
+
+# Minimum distance between MGEs and REs with potentially spurious connection to MGE
+summary(subset(dist, Set1 %in% subset(results, p > 0.001)$gene & !is.na(Set2))$MinDistance)
+#    Min.  1st Qu.   Median     Mean     3rd Qu.     Max. 
+#    32.0  237.5     2512.0     9202.5   9007.0      134506.0 
+
+summary(subset(dist, Set1 %in% subset(results, p < 0.001)$gene & !is.na(Set2))$MinDistance)
+#    Min.  1st Qu.   Median     Mean     3rd Qu.     Max. 
+#    23    229       505        2478     946         37252
+
+# Median distance is much higher (2512 vs 505) for those REs with tenuous connection
+
+# Shown graphically
+png("all.cooccur_mindist.png", height=600, width=800)
+dist$association <- ifelse(dist$Set1 %in% subset(results, p > 0.001)$gene, "tenuous", "real")
+ggplot(subset(dist, !is.na(Set1) & !is.na(Set2)), aes(x=association, y=log10(MinDistance))) + geom_boxplot(notch=TRUE, fill="grey", alpha=0.5) + labs(y="Log10 minimum distance between elements (bp)") + theme_bw() + my_theme + scale_x_discrete(labels=c("significant", "not significant"))
+dev.off()

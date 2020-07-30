@@ -1,0 +1,26 @@
+biosample_accession	sample_name	assembly_date	assembly_name	assembly_method	assembly_method_version	genome_coverage	sequencing_technology	reference_genome	update_for	bacteria_available_from	filename
+	UMC	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				UMC.contigs.renamed.fa.gz
+	MWW	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				MWW.contigs.renamed.fa.gz
+	CPA	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				CPA.contigs.renamed.fa.gz
+	BBB	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				BBB.contigs.renamed.fa.gz
+	ICG	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				ICG.contigs.renamed.fa.gz
+	LDP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				LDP.contigs.renamed.fa.gz
+	FSP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				FSP.contigs.renamed.fa.gz
+	TBP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				TBP.contigs.renamed.fa.gz
+	ILP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				ILP.contigs.renamed.fa.gz
+	FRP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				FRP.contigs.renamed.fa.gz
+	FCP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				FCP.contigs.renamed.fa.gz
+	CWN	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				CWN.contigs.renamed.fa.gz
+	CWS	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				CWS.contigs.renamed.fa.gz
+	AHP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				AHP.contigs.renamed.fa.gz
+	MLB	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				MLB.contigs.renamed.fa.gz
+	MPB	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				MPB.contigs.renamed.fa.gz
+	KRB	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				KRB.contigs.renamed.fa.gz
+	KWW	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				KWW.contigs.renamed.fa.gz
+	EBR	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				EBR.contigs.renamed.fa.gz
+	BRA2	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				BRA2.contigs.renamed.fa.gz
+	BCT	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				BCT.contigs.renamed.fa.gz
+	BRA	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				BRA.contigs.renamed.fa.gz
+	DIB	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				DIB.contigs.renamed.fa.gz
+	ICC	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				ICC.contigs.renamed.fa.gz
+	SVP	2018-02-05		Megahit	1.1.1	0x	Illumina HiSeq				SVP.contigs.renamed.fa.gz
